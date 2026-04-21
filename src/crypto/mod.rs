@@ -128,22 +128,31 @@ pub trait SigningPublicKey {
     /// public key.
     fn get_parameters(&self) -> Result<(SignatureAlgorithm, MessageDigest), CoseError>;
 
-    /// Verify `signature` over `message`.
+    /// Returns true if this backend hashes the input internally.
     ///
-    /// `message` is the raw pre-image bytes (e.g. a serialised `Sig_Structure`).
-    /// Each backend hashes `message` internally before verifying; callers must
-    /// **not** pre-hash.
-    fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError>;
+    /// When true, callers must pass the raw pre-image bytes.  When false (the
+    /// default), callers must pass a pre-computed digest produced by the
+    /// algorithm returned from `get_parameters`.
+    fn hashes_internally(&self) -> bool {
+        false
+    }
+
+    /// Verify `signature` over `digest`.
+    ///
+    /// Unless `hashes_internally()` returns true, `digest` must be a
+    /// pre-computed hash of the data to verify (e.g. the serialised
+    /// `Sig_Structure`), produced with the algorithm from `get_parameters`.
+    fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError>;
 }
 
 /// A private key that can produce new signatures
 pub trait SigningPrivateKey: SigningPublicKey {
-    /// Sign `message`.
+    /// Sign `digest`.
     ///
-    /// `message` is the raw pre-image bytes (e.g. a serialised `Sig_Structure`).
-    /// Each backend hashes `message` internally before signing; callers must
-    /// **not** pre-hash.
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoseError>;
+    /// Unless `hashes_internally()` returns true, `digest` must be a
+    /// pre-computed hash of the data to sign (e.g. the serialised
+    /// `Sig_Structure`), produced with the algorithm from `get_parameters`.
+    fn sign(&self, digest: &[u8]) -> Result<Vec<u8>, CoseError>;
 }
 
 /// Values from <https://tools.ietf.org/html/rfc8152#section-8.1>

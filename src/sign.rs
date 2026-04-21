@@ -5,7 +5,7 @@ use serde_bytes::ByteBuf;
 use serde_cbor::Error as CborError;
 use serde_cbor::Value as CborValue;
 
-use crate::crypto::{SigningPrivateKey, SigningPublicKey};
+use crate::crypto::{ActiveBackend, Hash, SigningPrivateKey, SigningPublicKey};
 use crate::error::CoseError;
 use crate::header_map::{map_to_empty_or_serialized, HeaderMap};
 
@@ -282,6 +282,8 @@ impl CoseSign1 {
         unprotected: &HeaderMap,
         key: &dyn SigningPrivateKey,
     ) -> Result<Self, CoseError> {
+        let (_, digest_alg) = key.get_parameters()?;
+
         // Create the SigStruct to sign
         let protected_bytes =
             map_to_empty_or_serialized(protected).map_err(CoseError::SerializationError)?;
@@ -289,12 +291,17 @@ impl CoseSign1 {
         let sig_structure = SigStructure::new_sign1(&protected_bytes, payload)
             .map_err(CoseError::SerializationError)?;
 
-        // Pass the raw Sig_Structure bytes to the key; each backend hashes internally.
-        let signature = key.sign(
-            &sig_structure
-                .as_bytes()
-                .map_err(CoseError::SerializationError)?,
-        )?;
+        let struct_bytes = sig_structure
+            .as_bytes()
+            .map_err(CoseError::SerializationError)?;
+
+        let sign_input = if key.hashes_internally() {
+            struct_bytes
+        } else {
+            ActiveBackend::hash(digest_alg, &struct_bytes)?
+        };
+
+        let signature = key.sign(&sign_input)?;
 
         Ok(CoseSign1 {
             protected: ByteBuf::from(protected_bytes),
@@ -354,7 +361,7 @@ impl CoseSign1 {
         // In theory, the digest itself does not have to match the curve, however,
         // this is the recommendation and the spec does not even provide a way to specify
         // another digest type, so, signatures will fail if this is done differently
-        let (signature_alg, _) = key.get_parameters()?;
+        let (signature_alg, digest_alg) = key.get_parameters()?;
 
         // The spec reads as follows:
         //    alg:  This parameter is used to indicate the algorithm used for the
@@ -396,13 +403,17 @@ impl CoseSign1 {
         let sig_structure = SigStructure::new_sign1(&self.protected, &self.payload)
             .map_err(CoseError::SerializationError)?;
 
-        // Pass the raw Sig_Structure bytes; each backend hashes internally.
-        key.verify(
-            &sig_structure
-                .as_bytes()
-                .map_err(CoseError::SerializationError)?,
-            &self.signature,
-        )
+        let struct_bytes = sig_structure
+            .as_bytes()
+            .map_err(CoseError::SerializationError)?;
+
+        let verify_input = if key.hashes_internally() {
+            struct_bytes
+        } else {
+            ActiveBackend::hash(digest_alg, &struct_bytes)?
+        };
+
+        key.verify(&verify_input, &self.signature)
     }
 
     /// This gets the `payload` and `protected` data of the document.

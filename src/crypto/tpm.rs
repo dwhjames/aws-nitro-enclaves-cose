@@ -18,7 +18,7 @@ use tss_esapi::{
 };
 
 use crate::{
-    crypto::{ActiveBackend, Hash, MessageDigest, SignatureAlgorithm, SigningPrivateKey, SigningPublicKey},
+    crypto::{MessageDigest, SignatureAlgorithm, SigningPrivateKey, SigningPublicKey},
     error::CoseError,
 };
 
@@ -115,7 +115,7 @@ impl SigningPublicKey for TpmKey {
         Ok(self.parameters)
     }
 
-    fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
+    fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
         // Recover the R and S factors from the signature contained in the object
         let (bytes_r, bytes_s) = signature.split_at(self.key_length);
 
@@ -138,8 +138,7 @@ impl SigningPublicKey for TpmKey {
             })?,
         );
 
-        let hashed = ActiveBackend::hash(self.parameters.1, message)?;
-        let data = Digest::try_from(hashed.as_slice()).map_err(|_| {
+        let data = Digest::try_from(digest).map_err(|_| {
             CoseError::UnsupportedError("Failed to convert hash to TPM digest".to_string())
         })?;
 
@@ -156,7 +155,7 @@ impl SigningPublicKey for TpmKey {
 }
 
 impl SigningPrivateKey for TpmKey {
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoseError> {
+    fn sign(&self, digest: &[u8]) -> Result<Vec<u8>, CoseError> {
         let scheme = TPMT_SIG_SCHEME {
             scheme: tpm_constants::tss::TPM2_ALG_NULL,
             details: Default::default(),
@@ -167,8 +166,7 @@ impl SigningPrivateKey for TpmKey {
             digest: Default::default(),
         };
 
-        let hashed = ActiveBackend::hash(self.parameters.1, message)?;
-        let data = Digest::try_from(hashed.as_slice())
+        let data = Digest::try_from(digest)
             .map_err(|_| CoseError::UnsupportedError("Tried to sign invalid data".to_string()))?;
 
         let signature = {

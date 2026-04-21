@@ -209,8 +209,7 @@ impl SigningPublicKey for EcPublicKey {
         Ok((sig_alg, digest))
     }
 
-    /// Verify `signature` over `message`.  Hashes `message` internally before verifying.
-    fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
+    fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
         fn ecdsa_verify(
             bytes_r: &[u8],
             bytes_s: &[u8],
@@ -228,11 +227,9 @@ impl SigningPublicKey for EcPublicKey {
         let curve_name = key.group().curve_name().ok_or_else(|| {
             CoseError::UnsupportedError("Anonymous EC keys are not supported".to_string())
         })?;
-        let (_, digest_alg, key_length) = ec_curve_to_parameters(curve_name)?;
-        let digest = openssl::hash::hash(digest_alg.into(), message)
-            .map_err(|e| CoseError::HashingError(Box::new(e)))?;
+        let (_, _, key_length) = ec_curve_to_parameters(curve_name)?;
         let (bytes_r, bytes_s) = signature.split_at(key_length);
-        ecdsa_verify(bytes_r, bytes_s, &digest, &key)
+        ecdsa_verify(bytes_r, bytes_s, digest, &key)
             .map_err(|e| CoseError::SignatureError(Box::new(e)))
     }
 }
@@ -252,26 +249,23 @@ impl SigningPublicKey for EcPrivateKey {
         Ok((sig_alg, digest))
     }
 
-    fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
-        self.public_key()?.verify(message, signature)
+    fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
+        self.public_key()?.verify(digest, signature)
     }
 }
 
 impl SigningPrivateKey for EcPrivateKey {
-    /// Sign `message`.  Hashes `message` internally before signing.
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoseError> {
+    fn sign(&self, digest: &[u8]) -> Result<Vec<u8>, CoseError> {
         let key = self.inner.ec_key().map_err(|_| {
             CoseError::UnsupportedError("Non-EC keys are not yet supported".to_string())
         })?;
         let curve_name = key.group().curve_name().ok_or_else(|| {
             CoseError::UnsupportedError("Anonymous EC keys are not supported".to_string())
         })?;
-        let (_, digest_alg, key_length) = ec_curve_to_parameters(curve_name)?;
-        let digest = openssl::hash::hash(digest_alg.into(), message)
-            .map_err(|e| CoseError::HashingError(Box::new(e)))?;
+        let (_, _, key_length) = ec_curve_to_parameters(curve_name)?;
         // Signature = I2OSP(R, n) || I2OSP(S, n) per RFC 8017 section 4.1
         let signature =
-            EcdsaSig::sign(&digest, &key).map_err(|e| CoseError::SignatureError(Box::new(e)))?;
+            EcdsaSig::sign(digest, &key).map_err(|e| CoseError::SignatureError(Box::new(e)))?;
         let bytes_r = signature.r().to_vec();
         let bytes_s = signature.s().to_vec();
         Ok(crate::crypto::der_util::merge_ec_signature(&bytes_r, &bytes_s, key_length))

@@ -5,7 +5,7 @@ use aws_sdk_kms::{
 };
 
 use crate::{
-    crypto::{ActiveBackend, Hash, MessageDigest, SignatureAlgorithm, SigningPrivateKey, SigningPublicKey},
+    crypto::{MessageDigest, SignatureAlgorithm, SigningPrivateKey, SigningPublicKey},
     error::CoseError,
 };
 
@@ -102,9 +102,13 @@ impl KmsKey {
         }
     }
 
+    // Only use local key verification when the key does not hash internally.
+    // ring-like keys (aws-lc-rs) hash in their verify() call; since sign.rs
+    // pre-computes the digest and passes it here, delegating to such a key
+    // would double-hash and produce an incorrect result.
     #[cfg(any(feature = "openssl", feature = "aws-lc-rs"))]
-    fn verify_with_public_key(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
-        self.public_key.as_ref().unwrap().verify(message, signature)
+    fn verify_with_public_key(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
+        self.public_key.as_ref().unwrap().verify(digest, signature)
     }
 }
 
@@ -120,7 +124,7 @@ impl SigningPublicKey for KmsKey {
     ///
     /// # Arguments
     ///
-    /// * `data` - A byte slice containing the data to verify
+    /// * `digest` - A byte slice containing the pre-computed digest of the data to verify
     /// * `signature` - A byte slice containing the signature to verify against the data
     ///
     /// # Returns
@@ -128,13 +132,13 @@ impl SigningPublicKey for KmsKey {
     /// * `Ok(true)` - If the signature is valid for the given data
     /// * `Ok(false)` - If the signature is invalid or verification fails gracefully
     /// * `Err(CoseError)` - If an error occurs during verification
-    fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
+    fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
         #[cfg(any(feature = "openssl", feature = "aws-lc-rs"))]
-        if self.public_key.is_some() {
-            return self.verify_with_public_key(message, signature);
+        if self.public_key.is_some()
+            && !self.public_key.as_ref().unwrap().hashes_internally()
+        {
+            return self.verify_with_public_key(digest, signature);
         }
-
-        let digest = ActiveBackend::hash(self.sig_alg.suggested_message_digest(), message)?;
 
         // Convert COSE raw R||S to DER for KMS
         let (bytes_r, bytes_s) = signature.split_at(self.sig_alg.key_length());
@@ -144,7 +148,7 @@ impl SigningPublicKey for KmsKey {
             .client
             .verify()
             .key_id(self.key_id.clone())
-            .message(Blob::new(digest))
+            .message(Blob::new(digest.to_vec()))
             .message_type(MessageType::Digest)
             .signing_algorithm(self.get_sig_alg_spec())
             .signature(Blob::new(sig))
@@ -176,13 +180,12 @@ impl SigningPrivateKey for KmsKey {
     ///
     /// * `Ok(Vec<u8>)` - A vector containing the formatted signature bytes
     /// * `Err(CoseError)` - If signing or signature formatting fails
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoseError> {
-        let digest = ActiveBackend::hash(self.sig_alg.suggested_message_digest(), message)?;
+    fn sign(&self, digest: &[u8]) -> Result<Vec<u8>, CoseError> {
         let request = self
             .client
             .sign()
             .key_id(self.key_id.clone())
-            .message(Blob::new(digest))
+            .message(Blob::new(digest.to_vec()))
             .message_type(MessageType::Digest)
             .signing_algorithm(self.get_sig_alg_spec())
             .send();

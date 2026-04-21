@@ -317,10 +317,10 @@ impl SigningPublicKey for EcPublicKey {
         Ok((self.alg, self.alg.suggested_message_digest()))
     }
 
-    /// Verify `signature` over `message`.
-    ///
-    /// The backend hashes `message` internally before verifying.  Pass the
-    /// raw Sig_Structure bytes, not a pre-computed digest.
+    fn hashes_internally(&self) -> bool {
+        true
+    }
+
     fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
         match self.inner.verify(message, signature) {
             Ok(()) => Ok(true),
@@ -334,6 +334,10 @@ impl SigningPublicKey for EcPublicKey {
 impl SigningPublicKey for EcPrivateKey {
     fn get_parameters(&self) -> Result<(SignatureAlgorithm, MessageDigest), CoseError> {
         Ok((self.alg, self.alg.suggested_message_digest()))
+    }
+
+    fn hashes_internally(&self) -> bool {
+        true
     }
 
     fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, CoseError> {
